@@ -1,0 +1,197 @@
+#!/usr/bin/env node
+ 
+var OAuth = require('oauth').OAuth;
+var colors = require('colors');
+ 
+var access_token = null;
+var access_token_secret = null;
+var key = null;
+var secret = null;
+ 
+var auth_token = "";
+var auth_secret = "";
+ 
+var REQUEST_TOKEN_URL = 'http://api.twitter.com/oauth/request_token';
+var ACCESS_TOKEN_URL = 'http://api.twitter.com/oauth/access_token';
+var OAUTH_VERSION = '1.0';
+var HASH_VERSION = 'HMAC-SHA1';
+ 
+var since_id = null;
+ 
+var fs = require('fs');
+ 
+function getAccessToken(oa, oauth_token, oauth_token_secret, pin) {
+  oa.getOAuthAccessToken(oauth_token, oauth_token_secret, pin, function(error, oauth_access_token, oauth_access_token_secret, results2) {
+    if (error) {
+      if (parseInt(error.statusCode) == 401) {
+        throw new Error('The pin number you have entered is incorrect'.bold.red);
+      }
+    }
+    console.log('Your OAuth Access Token: '.green + (oauth_access_token).bold.cyan);
+    console.log('Your OAuth Token Secret: '.green + (oauth_access_token_secret).bold.cyan);
+ 
+    access_token_secret = oauth_access_token_secret;
+    access_token = oauth_access_token;
+ 
+    console.log("Starting Collection ....");
+ 
+    fs.open("tweets.csv", 'a', 0666, function(err, fd) {
+ 
+      //Write the header
+      fs.write(fd, "tweetID, tweet, lat, lon\n", null, undefined, function(err, written) {});
+ 
+      //Start Collecting in here: 
+      setInterval(function() {
+        getGeoSearchWithTag("", "51.5", "0.0", "30km", 100, function(data) {
+ 
+          var tweets = JSON.parse(data);
+          
+          if(tweets.max_id_str != undefined){
+            since_id = tweets.max_id_str;
+          }
+ 
+          var csvString = "";
+ 
+          for (var i = 0; i < tweets.statuses.length; i++) {
+            var t = tweets.statuses[i];
+ 
+            var lat = null
+            var lng = null;
+            if (t.geo != undefined) {
+              lat = t.geo.coordinates[0];
+              lng = t.geo.coordinates[1];
+            }
+ 
+            if (lat != null && lng != null) {
+              csvString += t.user.id_str + ", \"" + escape_string(t.text) +  "\"," + lat + ", " + lng + "\n";
+            }
+          }
+ 
+          console.log(csvString);
+ 
+          fs.write(fd, csvString, null, undefined, function(err, written) {
+            //console.log('bytes written: ' + written);
+          });
+        });
+      }, 10 * 1000);
+ 
+    });
+ 
+  });
+ 
+ 
+}
+ 
+function getRequestToken(oa) {
+  oa.getOAuthRequestToken(function(error, oauth_token, oauth_token_secret, results) {
+    if (error) {
+      throw new Error(([error.statusCode, error.data].join(': ')).bold.red);
+    } else {
+ 
+      var url = "https://twitter.com/oauth/authorize?oauth_token=" + oauth_token;
+      console.log('In your browser, log in to your twitter account.  Then visit:'.bold.green);
+      console.log(('https://twitter.com/oauth/authorize?oauth_token=' + oauth_token).underline.green);
+      console.log('After logged in, you will be promoted with a pin number'.bold.green);
+      console.log('Enter the pin number here:'.bold.yellow);
+ 
+      var stdin = process.openStdin();
+      stdin.on('data', function(chunk) {
+        pin = chunk.toString().trim();
+        if (pin != "") {
+          getAccessToken(oa, oauth_token, oauth_token_secret, pin);
+        }
+      });
+    }
+  });
+}
+ 
+var setupOAuth = function(app_key, app_secret) {
+    // Authenticate with Twitter based on the app key and app secret passed
+    oa = new OAuth(REQUEST_TOKEN_URL, ACCESS_TOKEN_URL, app_key, app_secret, OAUTH_VERSION, null, HASH_VERSION);
+    getRequestToken(oa);
+  }
+ 
+var setupOAuthWithTokens = function(app_key, app_secret, oauth_access_token, oauth_token_secret) {
+    // if token and secret is passed then bypass authentication
+    oa = new OAuth(REQUEST_TOKEN_URL, ACCESS_TOKEN_URL, app_key, app_secret, OAUTH_VERSION, null, HASH_VERSION);
+    access_token = oauth_access_token;
+    access_token_secret = oauth_token_secret;
+    console.log("Starting Collection ....");
+  }
+ 
+var getGeoSearch = function(lat, lng, rad, count, callback) {
+    oa.get("https://api.twitter.com/1.1/search/tweets.json?count=" + count + "&geocode=" + lat + "," + lng + "," + rad, access_token, access_token_secret, function(error, data) {
+      var result;
+      if (error) {
+        result = {
+          error: error
+        };
+      } else {
+        result = data;
+      }
+      callback(result);
+    });
+  };
+ 
+var getGeoSearchWithTag = function(query, lat, lng, rad, count, callback) {
+    var url = "https://api.twitter.com/1.1/search/tweets.json?q=" + encodeURIComponent(query) + "&count=" + count + "&geocode=" + lat + "," + lng + "," + rad;
+ 
+    if (since_id != null) {
+      url += "&since_id=" + since_id;
+      console.log(since_id);
+    }
+ 
+    oa.get(url, access_token, access_token_secret, function(error, data) {
+      var result;
+      if (error) {
+        result = {
+          error: error
+        };
+      } else {
+        result = data;
+      }
+      callback(result);
+    });
+  };
+ 
+var getSearch = function(query, count, callback) {
+    oa.get("https://api.twitter.com/1.1/search/tweets.json?q=" + encodeURIComponent(query) + "&count=" + count, access_token, access_token_secret, function(error, data) {
+      var result;
+      if (error) {
+        result = {
+          error: error
+        };
+      } else {
+        result = data;
+      }
+      callback(result);
+    });
+  };
+ 
+function escape_string (str) {
+    if(str == undefined){ return str; }
+    return str.replace(/[\0\x08\x09\x1a\n\r"'\\\%]/g, function (char) {
+        switch (char) {
+            case "\0":
+                return "\\0";
+            case "\x08":
+                return "\\b";
+            case "\x09":
+                return "\\t";
+            case "\x1a":
+                return "\\z";
+            case "\n":
+                return "\\n";
+            case "\r":
+                return "\\r";
+            case "\"":
+            case "'":
+            case "\\":
+            case "%":
+                return "\\"+char; // prepends a backslash to backslash, percent,
+                                  // and double/single quotes
+        }
+    });
+}
+ 
+setupOAuth(auth_token, auth_secret);
